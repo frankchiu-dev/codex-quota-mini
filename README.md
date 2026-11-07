@@ -27,8 +27,12 @@
 
 PowerShell 腳本透過本機 `codex.exe app-server` 的標準輸入與輸出，呼叫公開的 [`account/rateLimits/read` 介面](https://developers.openai.com/codex/app-server)。它取出 Codex 的七天額度，以 `100 − usedPercent` 計算剩餘比例。查詢只讀取額度，不會送出模型請求。
 
-顯示層是一個獨立的 Windows 小視窗。它用 Windows UI Automation 定位 Codex 的額度按鈕，讓滑鼠點擊穿透到原按鈕。找不到按鈕時會隱藏。這個工具適用於 Windows 主視窗，經繁體中文介面實測；Codex 更新若改了按鈕名稱或位置，可能需要調整定位。
+顯示層是一個獨立的 Windows 小視窗。它用 Windows UI Automation 定位 Codex 的額度按鈕，讓滑鼠點擊穿透到原按鈕。只有 Codex 主視窗在前景時顯示。切換到其他程式、最小化、隱藏視窗或找不到按鈕時會隱藏；回到主視窗後恢復。關閉主視窗後工具會退出。這個工具適用於 Windows 主視窗，經繁體中文介面實測；Codex 更新若改了按鈕名稱或位置，可能需要調整定位。
 
 ## 授權
 
 [MIT](LICENSE) · 社群獨立專案。
+
+## 開發驗證
+
+在 Windows 執行 `pwsh -NoProfile -STA -File tests/window-lifecycle.ps1`。測試使用隔離的 WPF 視窗、模擬的額度與前景視窗狀態，檢查切換視窗、最小化、隱藏、還原、關閉，以及按鈕暫時消失時的顯示與定位。

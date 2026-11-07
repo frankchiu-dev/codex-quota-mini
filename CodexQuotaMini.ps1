@@ -11,7 +11,20 @@ Add-Type -Name Window -Namespace Quota -MemberDefinition @'
 [DllImport("user32.dll")] public static extern int GetWindowLongW(IntPtr h, int index);
 [DllImport("user32.dll")] public static extern int SetWindowLongW(IntPtr h, int index, int value);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int height, uint flags);
+[DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attribute, out int value, int size);
 '@
+
+function Test-OwnerVisible([IntPtr]$handle) {
+    if (-not [Quota.Window]::IsWindowVisible($handle) -or [Quota.Window]::IsIconic($handle) -or
+        [Quota.Window]::GetForegroundWindow() -ne $handle) { return $false }
+    $cloaked = 0
+    $result = [Quota.Window]::DwmGetWindowAttribute($handle,14,[ref]$cloaked,4)
+    return $result -eq 0 -and $cloaked -eq 0
+}
 
 function Read-WeeklyQuota {
     $ErrorActionPreference = 'Stop'
@@ -108,33 +121,48 @@ if (-not $ownerProcess) {
     $stop.Dispose(); return
 }
 $owner = [AutomationElement]::FromHandle($ownerProcess.MainWindowHandle)
+$ownerHandle = $ownerProcess.MainWindowHandle
 $helper = [Interop.WindowInteropHelper]::new($window)
-$helper.Owner = $ownerProcess.MainWindowHandle
+$helper.Owner = $ownerHandle
 $hwnd = $helper.EnsureHandle()
 $style = [Quota.Window]::GetWindowLongW($hwnd,-20)
 $null = [Quota.Window]::SetWindowLongW($hwnd,-20,($style -bor 0x080800A0)) # layered, click-through, toolwindow, no activation
 
 $tick = [Threading.DispatcherTimer]::new()
-$tick.Interval = [TimeSpan]::FromSeconds(1)
-$state = @{ Next = 0; Job = $null; Meter = $null; RetryAnchor = 0 }
+$tick.Interval = [TimeSpan]::FromMilliseconds(200)
+$state = @{ Next = 0; Job = $null; Meter = $null; RetryAnchor = 0; PositionCheck = 0; Rect = $null }
 $tick.Add_Tick({
-    if ($stop.WaitOne(0) -or $ownerProcess.HasExited) { $window.Close(); return }
+    if ($stop.WaitOne(0) -or $ownerProcess.HasExited -or -not [Quota.Window]::IsWindow($ownerHandle)) {
+        $window.Close(); return
+    }
+    # UI Automation can return stale button bounds after minimize or Show Desktop.
+    if (-not (Test-OwnerVisible $ownerHandle)) {
+        if ($window.IsVisible) { $window.Hide() }
+        $state.Rect = $null; return
+    }
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     try {
         if (-not $state.Meter -and $now -ge $state.RetryAnchor) {
             $state.RetryAnchor = $now + 5
             $state.Meter = Find-Meter $owner
         }
-        $rect = $state.Meter.Current.BoundingRectangle
-        if (-not $rect -or $rect.IsEmpty -or $state.Meter.Current.IsOffscreen) {
-            $state.Meter = $null; $window.Hide(); return
+        if (-not $state.Meter) { $state.Rect = $null; $window.Hide(); return }
+        if (-not $state.Rect -or $now -ge $state.PositionCheck) {
+            $state.PositionCheck = $now + 1
+            $state.Rect = $state.Meter.Current.BoundingRectangle
         }
-    } catch { $state.Meter = $null; $window.Hide(); return }
-    if (-not $window.IsVisible) { $window.Show() }
+        $rect = $state.Rect
+        if (-not $rect -or $rect.IsEmpty -or $rect.Width -le 0 -or $rect.Height -le 0 -or $state.Meter.Current.IsOffscreen) {
+            $state.Meter = $null; $state.Rect = $null; $window.Hide(); return
+        }
+    } catch { $state.Meter = $null; $state.Rect = $null; $window.Hide(); return }
+    # Recheck after UI Automation, which may finish after the user switches windows.
+    if (-not (Test-OwnerVisible $ownerHandle)) { $window.Hide(); $state.Rect = $null; return }
     # Cover the original dial, leaving the outer button edge and click target intact.
     $width = $height = [int]([Math]::Min($rect.Width,$rect.Height) * .88)
     $x = [int]($rect.Left + ($rect.Width - $width)/2); $y = [int]($rect.Top + ($rect.Height - $height)/2)
     $null = [Quota.Window]::SetWindowPos($hwnd, [IntPtr]::Zero, $x, $y, $width, $height, 0x14)
+    if (-not $window.IsVisible) { $window.Show() }
     if ($state.Job -and $state.Job.IsCompleted) {
         try { $data = @($state.Worker.EndInvoke($state.Job)) | Select-Object -First 1 } catch { $data = $null }
         $state.Worker.Dispose(); $state.Job = $null
