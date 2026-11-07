@@ -1,0 +1,4 @@
+@echo off
+setlocal
+set "QUOTA_SCRIPT=%~dp0CodexQuotaMini.ps1"
+start "" /min "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -WindowStyle Hidden -Command "$shell=(Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source; if(-not $shell){ $shell=Get-AppxPackage 'OpenAI.CodexPrimaryRuntime*' | Sort-Object Version -Descending | ForEach-Object {Join-Path $_.InstallLocation 'dependencies\native\powershell\pwsh.exe'} | Where-Object {Test-Path -LiteralPath $_} | Select-Object -First 1 }; if($shell){Start-Process -FilePath $shell -WindowStyle Hidden -ArgumentList @('-NoProfile','-STA','-WindowStyle','Hidden','-File',([char]34 + $env:QUOTA_SCRIPT + [char]34))} else {Add-Type -AssemblyName PresentationFramework; [void][Windows.MessageBox]::Show('Open Codex to load its Windows runtime, then try again.','Codex Quota')}"
